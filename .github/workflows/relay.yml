@@ -2,8 +2,8 @@ name: tweet-to-discord
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # 10分ごと（GitHubの混雑で数分遅れることあり）
-  workflow_dispatch:          # 手動実行ボタン
+    - cron: "*/30 * * * *"   # 予備（GitHubの定期実行は数時間遅れることがある）
+  workflow_dispatch:          # cron-job.org から5分ごとに起動される
 
 permissions:
   contents: write
@@ -17,8 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: main   # 待たされた実行でも最新の state.json を使う（二重投稿防止）
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Relay tweets
@@ -26,6 +28,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python relay.py
       - name: Save state
+        if: always()   # 投稿が途中で失敗しても、投稿済みの分は記録する
         run: |
           if [ -n "$(git status --porcelain state.json)" ]; then
             git config user.name "github-actions[bot]"
