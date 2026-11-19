@@ -39,7 +39,14 @@ def http_json(url, data=None):
 
 
 def fetch_tweets(user):
-    data = http_json(f"https://api.fxtwitter.com/2/profile/{user}/statuses")
+    for attempt in range(3):  # fxtwitter は一時的に 404/5xx を返すことがあるので再試行
+        try:
+            data = http_json(f"https://api.fxtwitter.com/2/profile/{user}/statuses")
+            break
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(3 * (attempt + 1))
     tweets = []
     for t in data.get("results", []):
         if t.get("type") != "status":
@@ -101,11 +108,12 @@ def main():
         sys.exit("DISCORD_WEBHOOK_URL が設定されていません")
     state = load_state()
     errors = 0
+    post_errors = 0
     for user, (label, tag_id) in ACCOUNTS.items():
         try:
             tweets = fetch_tweets(user)
         except Exception as e:
-            print(f"[{user}] 取得失敗: {e}")
+            print(f"[{user}] 取得失敗（次回また試します）: {e}")
             errors += 1
             continue
         last_id = state.get(user)
@@ -116,15 +124,24 @@ def main():
             continue
         new = [t for t in tweets if int(t["id"]) > int(last_id)]
         for t in new:
-            post_to_discord(label, tag_id, t)
+            try:
+                post_to_discord(label, tag_id, t)
+            except Exception as e:
+                # 投稿できたところまでは記録し、残りは次回に回す（二重投稿を防ぐ）
+                print(f"[{user}] Discord投稿失敗: {e}")
+                post_errors += 1
+                break
             state[user] = t["id"]
             print(f"[{user}] 投稿: {t['id']}")
             time.sleep(1)
         if not new:
             print(f"[{user}] 新着なし")
     save_state(state)
-    if errors == len(ACCOUNTS):
-        sys.exit(1)
+    # 取得失敗は次回の実行で自動的に取り直すので、ジョブ自体は失敗扱いにしない
+    if errors:
+        print(f"取得失敗: {errors}件")
+    if post_errors:
+        sys.exit(1)  # Discord側の問題（ウェブフック削除など）は気づけるよう失敗扱いにする
 
 
 if __name__ == "__main__":
